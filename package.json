@@ -1,0 +1,15 @@
+{
+  "name": "housecatch",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "청약홈 무순위 / 임의공급 / 불법행위재공급 물량을 한 화면에서 보는 대시보드",
+  "scripts": {
+    "start": "node src/server.js",
+    "scrape": "node src/scrape.js",
+    "build:static": "node src/buildStatic.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

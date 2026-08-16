@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>houseCatch — 무순위·임의공급·불법행위재공급</title>
+<meta name="description" content="청약홈의 무순위 / 임의공급 / 불법행위재공급 물량을 한 화면에서." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%A0%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">🏠</span>
+      <div class="brand-text">
+        <strong>houseCatch</strong>
+        <span>무순위 · 임의공급 · 불법행위재공급</span>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span class="stamp" id="stamp" title="데이터 기준 시각"></span>
+      <button class="icon-btn" id="btn-refresh" title="청약홈에서 새로 가져오기">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-.6 4M20 5v6h-6"/></svg>
+        <span class="btn-label">새로고침</span>
+      </button>
+      <button class="icon-btn" id="btn-theme" title="라이트/다크 전환">
+        <svg viewBox="0 0 24 24" aria-hidden="true" class="i-moon"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+        <svg viewBox="0 0 24 24" aria-hidden="true" class="i-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="progress" id="progress" hidden><div></div></div>
+</header>
+
+<main class="wrap">
+
+  <section class="stats" id="stats" aria-label="요약"></section>
+
+  <section class="controls" aria-label="필터">
+    <div class="row row-primary">
+      <div class="segmented" id="status-seg" role="tablist" aria-label="접수 상태"></div>
+      <div class="spacer"></div>
+      <label class="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="search" id="q" placeholder="단지명 · 지역 · 시행사 검색" autocomplete="off" />
+      </label>
+      <div class="viewtabs" id="view-tabs" role="tablist" aria-label="보기 방식">
+        <button data-view="card" role="tab" title="카드">카드</button>
+        <button data-view="calendar" role="tab" title="캘린더">캘린더</button>
+        <button data-view="table" role="tab" title="표">표</button>
+      </div>
+    </div>
+
+    <div class="row row-chips">
+      <div class="chipset" id="kind-chips" aria-label="공급 구분"></div>
+      <div class="chipset chipset-area" id="area-chips" aria-label="지역"></div>
+    </div>
+
+    <div class="row row-extra">
+      <label class="mini">
+        정렬
+        <select id="sort">
+          <option value="soon">청약 임박순</option>
+          <option value="notice">공고 최신순</option>
+          <option value="units">물량 많은순</option>
+          <option value="gain">시세차익 큰순</option>
+          <option value="price">분양가 낮은순</option>
+          <option value="area">지역순</option>
+        </select>
+      </label>
+      <label class="mini">
+        시세비교
+        <select id="basis">
+          <option value="all">전체</option>
+          <option value="gain">차익 계산된 건만</option>
+          <option value="tight">같은 단지 비교만</option>
+        </select>
+      </label>
+      <label class="mini">
+        최소 물량
+        <select id="minUnits">
+          <option value="0">전체</option>
+          <option value="2">2세대 이상</option>
+          <option value="5">5세대 이상</option>
+          <option value="10">10세대 이상</option>
+          <option value="30">30세대 이상</option>
+          <option value="100">100세대 이상</option>
+        </select>
+      </label>
+      <button class="toggle" id="fav-only" aria-pressed="false">⭐ 찜만</button>
+      <button class="ghost" id="reset">필터 초기화</button>
+      <span class="result-count" id="result-count"></span>
+    </div>
+  </section>
+
+  <section id="view-card" class="view">
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section id="view-calendar" class="view" hidden>
+    <div class="cal-head">
+      <button class="icon-btn" id="cal-prev" title="이전 달">‹</button>
+      <h2 id="cal-title"></h2>
+      <button class="icon-btn" id="cal-next" title="다음 달">›</button>
+      <button class="ghost" id="cal-today">이번 달</button>
+    </div>
+    <div class="cal" id="cal"></div>
+  </section>
+
+  <section id="view-table" class="view" hidden>
+    <div class="table-scroll">
+      <table class="tbl" id="tbl">
+        <thead>
+          <tr>
+            <th>상태</th><th>구분</th><th>지역</th><th>단지명</th>
+            <th class="num">물량</th><th class="num">최저 분양가</th>
+            <th class="num">실거래 시세</th><th class="num">시세차익</th><th>비교 기준</th>
+            <th>청약기간</th><th>발표</th><th>입주</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="empty" id="empty" hidden>
+    <p>조건에 맞는 물량이 없어요.</p>
+    <button class="ghost" id="empty-reset">필터 초기화</button>
+  </div>
+
+  <footer class="foot">
+    <p>
+      출처 ·
+      <a href="https://www.applyhome.co.kr/ai/aia/selectAPTRemndrLttotPblancListView.do" target="_blank" rel="noreferrer">청약홈 APT잔여세대 분양정보</a>
+      /
+      <a href="https://www.applyhome.co.kr/ai/aib/selectSubscrptCalenderView.do" target="_blank" rel="noreferrer">청약캘린더</a>
+      · 시세 ·
+      <a href="https://rt.molit.go.kr/" target="_blank" rel="noreferrer">국토교통부 실거래가 공개시스템</a>
+      (최근 1년 아파트 매매 · 분양권)
+    </p>
+    <p class="muted">
+      시세차익은 <b>분양가와 실거래가의 차이</b>일 뿐 확정 수익이 아닙니다. 같은 단지·같은 평형 거래가 없으면 비슷한 평형으로 비교하므로,
+      카드마다 표시된 <b>비교 기준</b>과 <b>거래 건수</b>를 함께 보세요. 신청 전 반드시 <b>입주자모집공고</b> 원문과 현장 시세를 확인하세요.
+    </p>
+  </footer>
+</main>
+
+<dialog id="detail" class="sheet">
+  <div class="sheet-inner" id="detail-body"></div>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
