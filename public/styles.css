@@ -35,6 +35,8 @@
   --k-random-soft: #ecebfd;
   --k-illegal: #be1259;   /* 불법행위 재공급 */
   --k-illegal-soft: #fde8f0;
+  --k-apt: #15803d;       /* 아파트 일반분양 */
+  --k-apt-soft: #dcf5e4;
 
   --radius: 14px;
   --radius-sm: 9px;
@@ -84,6 +86,8 @@
     --k-random-soft: #221e3c;
     --k-illegal: #ff87b4;
     --k-illegal-soft: #341423;
+    --k-apt: #5fd97f;
+    --k-apt-soft: #102c19;
 
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -14px rgba(0, 0, 0, .8);
     --shadow-lg: 0 16px 48px -16px rgba(0, 0, 0, .8);
@@ -125,6 +129,8 @@
   --k-random-soft: #221e3c;
   --k-illegal: #ff87b4;
   --k-illegal-soft: #341423;
+  --k-apt: #5fd97f;
+  --k-apt-soft: #102c19;
 
   --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -14px rgba(0, 0, 0, .8);
   --shadow-lg: 0 16px 48px -16px rgba(0, 0, 0, .8);
@@ -339,7 +345,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 
 .card-dates { margin: 12px 14px 0; border-top: 1px dashed var(--line); padding-top: 10px; display: grid; gap: 4px; }
 .dline { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
-.dline span { color: var(--text-3); width: 34px; flex: none; white-space: nowrap; }
+.dline span { color: var(--text-3); width: 40px; flex: none; white-space: nowrap; }
 .dline b { font-weight: 600; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .dline.hot b { color: var(--text); }
 

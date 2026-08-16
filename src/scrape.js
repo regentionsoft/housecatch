@@ -9,7 +9,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { detailUrl, fetchDetail, fetchList, KIND_CODES } from './applyhome.js';
+import { detailUrl, fetchAptList, fetchDetail, fetchList, KIND_CODES } from './applyhome.js';
 import { applyMarketSnapshot, enrichWithMarket, saveMarketSnapshot } from './market.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,12 +70,18 @@ export async function scrape({ beginPd, endPd, log = () => {} } = {}) {
   const range = beginPd && endPd ? { beginPd, endPd } : defaultRange();
   log(`조회 기간 ${range.beginPd} ~ ${range.endPd}`);
 
-  const { rows, total } = await fetchList({
+  // 잔여세대(무순위·임의공급·불법행위재공급) 와 아파트 일반분양(특별공급·1·2순위) 을 함께 모은다
+  const remnant = await fetchList({
     ...range,
     kinds: Object.keys(KIND_CODES),
-    onProgress: (p) => log(`  목록 ${p.page}/${p.pages} (${p.collected}/${p.total}건)`),
+    onProgress: (p) => log(`  잔여세대 ${p.page}/${p.pages} (${p.collected}/${p.total}건)`),
   });
-  log(`목록 ${rows.length}건 수집`);
+  const apt = await fetchAptList({
+    ...range,
+    onProgress: (p) => log(`  일반분양 ${p.page}/${p.pages} (${p.collected}/${p.total}건)`),
+  });
+  const rows = [...remnant.rows, ...apt.rows];
+  log(`목록 ${rows.length}건 수집 (잔여세대 ${remnant.rows.length} + 일반분양 ${apt.rows.length})`);
 
   const cache = await readJson(CACHE_PATH, {});
   const todayStr = today();
@@ -150,6 +156,8 @@ function merge(row, detail) {
     houseManageNo: row.houseManageNo,
     houseSecd: row.houseSecd,
     kind: row.kind,
+    category: row.houseSecd === '01' ? 'apt' : 'remnant',
+    houseType: row.houseType ?? '',
     area: row.area,
     name: row.name.trim(),
     developer: row.developer,
@@ -158,6 +166,7 @@ function merge(row, detail) {
     applyStart: row.applyStart || d.applyStart || '',
     applyEnd: row.applyEnd || d.applyEnd || '',
     winnerDate: row.winnerDate || d.winnerDate || '',
+    stages: d.stages ?? [],
     contractStart: d.contractStart ?? '',
     contractEnd: d.contractEnd ?? '',
     moveIn: d.moveIn ?? '',

@@ -11,6 +11,7 @@
     { id: 'pre', label: '무순위(사전)', match: (k) => k.includes('사전'), c: 'var(--k-pre)', soft: 'var(--k-pre-soft)' },
     { id: 'random', label: '임의공급', match: (k) => k.includes('임의'), c: 'var(--k-random)', soft: 'var(--k-random-soft)' },
     { id: 'illegal', label: '불법행위재공급', match: (k) => k.includes('불법'), c: 'var(--k-illegal)', soft: 'var(--k-illegal-soft)' },
+    { id: 'apt', label: '아파트 일반분양', match: (k) => k.includes('일반분양'), c: 'var(--k-apt)', soft: 'var(--k-apt-soft)' },
   ];
   const FALLBACK_KIND = { id: 'etc', label: '기타', c: 'var(--closed)', soft: 'var(--closed-soft)' };
 
@@ -133,6 +134,15 @@
     const { m2, tag } = parseType(name);
     if (m2 == null) return name;
     return `${m2.toFixed(2).replace(/\.?0+$/, '')}㎡${tag ? ' ' + tag : ''}`;
+  }
+
+  /** 카드에 짧게 넣으려고 줄인 단계 이름 */
+  const STAGE_SHORT = { 특별공급: '특공', 일반공급: '일반' };
+  const stageLabel = (s) => STAGE_SHORT[s.label] ?? s.label;
+
+  /** 아직 안 지난(또는 오늘 진행 중인) 첫 단계 */
+  function nextStage(it) {
+    return (it.stages ?? []).find((s) => (s.end || s.start) >= TODAY) ?? null;
   }
 
   function statusOf(it) {
@@ -497,13 +507,27 @@
     }
 
     // 일정
+    const upcoming = nextStage(it);
+    const scheduleLines = it.stages?.length
+      ? it.stages.map((s) =>
+          el(
+            'div',
+            { className: `dline${s === upcoming ? ' hot' : ''}` },
+            el('span', {}, stageLabel(s)),
+            el('b', {}, fmtPeriod(s.start, s.end)),
+          ),
+        )
+      : [el('div', { className: 'dline hot' }, el('span', {}, '청약'), el('b', {}, fmtPeriod(it.applyStart, it.applyEnd)))];
+
     node.append(
       el(
         'div',
         { className: 'card-dates' },
-        el('div', { className: 'dline hot' }, el('span', {}, '청약'), el('b', {}, fmtPeriod(it.applyStart, it.applyEnd))),
+        ...scheduleLines,
         el('div', { className: 'dline' }, el('span', {}, '발표'), el('b', {}, fmtDate(it.winnerDate))),
-        el('div', { className: 'dline' }, el('span', {}, '계약'), el('b', {}, it.contractStart ? fmtPeriod(it.contractStart, it.contractEnd) : '-')),
+        it.stages?.length
+          ? null
+          : el('div', { className: 'dline' }, el('span', {}, '계약'), el('b', {}, it.contractStart ? fmtPeriod(it.contractStart, it.contractEnd) : '-')),
         el('div', { className: 'dline' }, el('span', {}, '입주'), el('b', {}, it.moveIn || '-')),
       ),
     );
@@ -524,6 +548,14 @@
   }
 
   function ddayText(it) {
+    // 단계가 나뉜 공고(특별공급·1순위·2순위)는 코앞의 단계를 기준으로 알려준다
+    const stage = it._status === 'closed' ? null : nextStage(it);
+    if (stage) {
+      const d = daysFrom(stage.start);
+      if (d > 0) return `${stageLabel(stage)} D-${d}`;
+      const left = daysFrom(stage.end || stage.start);
+      return left === 0 ? `${stageLabel(stage)} 오늘` : `${stageLabel(stage)} 진행중`;
+    }
     if (it._status === 'upcoming') {
       const d = daysFrom(it.applyStart);
       return d === 0 ? '오늘 시작' : `접수까지 D-${d}`;
@@ -594,16 +626,21 @@
 
     // 날짜 → 해당일에 청약접수가 열려 있는 물량
     const byDay = new Map();
+    const put = (key, entry) => {
+      if (!key.startsWith(state.calMonth)) return;
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(entry);
+    };
+    const spread = (from, to, entry) => {
+      const start = parseDate(from);
+      const end = parseDate(to || from);
+      if (!start) return;
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) put(todayStr(d), entry);
+    };
     for (const it of list) {
-      if (!it.applyStart) continue;
-      const start = parseDate(it.applyStart);
-      const end = parseDate(it.applyEnd || it.applyStart);
-      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const key = todayStr(d);
-        if (!key.startsWith(state.calMonth)) continue;
-        if (!byDay.has(key)) byDay.set(key, []);
-        byDay.get(key).push(it);
-      }
+      // 특별공급·1순위·2순위처럼 단계가 나뉜 공고는 날짜마다 어느 단계인지 같이 보여준다
+      if (it.stages?.length) for (const st of it.stages) spread(st.start, st.end, { it, stage: st });
+      else spread(it.applyStart, it.applyEnd, { it, stage: null });
     }
 
     const first = new Date(y, m - 1, 1);
@@ -628,8 +665,13 @@
       cell.append(el('div', { className: `cal-day${dowCls}` }, d.getDate()));
 
       const list_ = byDay.get(key) ?? [];
-      for (const it of list_.slice(0, 3)) {
-        const b = el('button', { className: 'cal-item', type: 'button', title: `${it.name} · ${it.totalUnits ?? '-'}세대` }, el('u', {}, `${it.totalUnits ?? '-'}`), it.name);
+      for (const { it, stage } of list_.slice(0, 3)) {
+        const b = el(
+          'button',
+          { className: 'cal-item', type: 'button', title: `${it.name}${stage ? ` · ${stage.label}` : ''} · ${it.totalUnits ?? '-'}세대` },
+          el('u', {}, stage ? stageLabel(stage) : `${it.totalUnits ?? '-'}`),
+          it.name,
+        );
         b.style.setProperty('--c', it._kind.c);
         b.style.setProperty('--c-soft', it._kind.soft);
         b.onclick = () => openDetail(it);
@@ -682,7 +724,12 @@
       { className: 'kv' },
       el('dt', {}, '시행사'), el('dd', {}, it.developer || '-'),
       el('dt', {}, '모집공고일'), el('dd', {}, it.noticeDate || '-'),
-      el('dt', {}, '청약접수'), el('dd', {}, `${it.applyStart || '-'}${it.applyEnd && it.applyEnd !== it.applyStart ? ` ~ ${it.applyEnd}` : ''}`),
+      ...(it.stages?.length
+        ? it.stages.flatMap((st) => [
+            el('dt', {}, st.label),
+            el('dd', {}, `${st.start}${st.end && st.end !== st.start ? ` ~ ${st.end}` : ''}`),
+          ])
+        : [el('dt', {}, '청약접수'), el('dd', {}, `${it.applyStart || '-'}${it.applyEnd && it.applyEnd !== it.applyStart ? ` ~ ${it.applyEnd}` : ''}`)]),
       el('dt', {}, '당첨자발표'), el('dd', {}, it.winnerDate || '-'),
       el('dt', {}, '계약일'), el('dd', {}, it.contractStart ? `${it.contractStart}${it.contractEnd && it.contractEnd !== it.contractStart ? ` ~ ${it.contractEnd}` : ''}` : '-'),
       el('dt', {}, '입주예정'), el('dd', {}, it.moveIn || '-'),
@@ -792,12 +839,17 @@
     const head = el('div', { className: 'sheet-head' });
     head.append(
       el('h3', {}, `${key} 청약`),
-      el('p', {}, `${list.length}건 · ${list.reduce((a, i) => a + (i.totalUnits ?? 0), 0).toLocaleString()}세대`),
+      el('p', {}, `${list.length}건 · ${list.reduce((a, e) => a + (e.it.totalUnits ?? 0), 0).toLocaleString()}세대`),
       el('button', { className: 'sheet-close', type: 'button', onclick: () => dlg.close() }, '✕'),
     );
     const body = el('div', { className: 'sheet-body' });
-    for (const it of list) {
-      const row = el('button', { className: 'cal-item', type: 'button', style: 'margin-bottom:6px;padding:8px 10px;font-size:13px' }, el('u', {}, `${it.totalUnits ?? '-'}세대`), it.name);
+    for (const { it, stage } of list) {
+      const row = el(
+        'button',
+        { className: 'cal-item', type: 'button', style: 'margin-bottom:6px;padding:8px 10px;font-size:13px' },
+        el('u', {}, stage ? `${stage.label} · ${it.totalUnits ?? '-'}세대` : `${it.totalUnits ?? '-'}세대`),
+        it.name,
+      );
       row.style.setProperty('--c', it._kind.c);
       row.style.setProperty('--c-soft', it._kind.soft);
       row.onclick = () => openDetail(it);

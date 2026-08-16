@@ -16,8 +16,13 @@ const UA =
 
 const LIST_URL = `${BASE}/ai/aia/selectAPTRemndrLttotPblancListView.do`;
 const DETAIL_URL = `${BASE}/ai/aia/selectAPTRemndrLttotPblancDetailView.do`;
+const APT_LIST_URL = `${BASE}/ai/aia/selectAPTLttotPblancListView.do`;
+const APT_DETAIL_URL = `${BASE}/ai/aia/selectAPTLttotPblancDetail.do`;
 const CALENDAR_URL = `${BASE}/ai/aib/selectSubscrptCalender.do`;
 const LIST_REFERER = `${BASE}/ai/aia/selectAPTRemndrLttotPblancListView.do`;
+
+/** 아파트 일반분양(특별공급·1순위·2순위)은 houseSecd 01, 민간사전청약은 09 */
+const isApt = (houseSecd) => houseSecd === '01' || houseSecd === '09';
 
 /** 분양구분 코드 (목록 화면 체크박스 값) */
 export const KIND_CODES = {
@@ -27,14 +32,14 @@ export const KIND_CODES = {
   '03': '불법행위재공급',
 };
 
-/** 상세 팝업 딥링크 (GET으로도 열린다) */
+/** 상세 팝업 딥링크 (GET으로도 열린다). 아파트 일반분양은 별도 화면을 쓴다. */
 export function detailUrl({ houseManageNo, pblancNo, houseSecd }) {
   const q = new URLSearchParams({
     houseManageNo: String(houseManageNo),
     pblancNo: String(pblancNo),
     houseSecd: String(houseSecd),
   });
-  return `${DETAIL_URL}?${q}`;
+  return `${isApt(houseSecd) ? APT_DETAIL_URL : DETAIL_URL}?${q}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -162,6 +167,75 @@ export async function fetchList({ beginPd, endPd, kinds = [], onProgress } = {})
 }
 
 /* ------------------------------------------------------------------ */
+/* 아파트 일반분양 목록 (특별공급 · 1순위 · 2순위)                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 분양/임대 구분. 시세차익 비교가 의미 있는 분양주택만 기본으로 본다.
+ * 0=분양주택, 1=분양전환 가능임대, 2=분양전환 불가임대
+ */
+export const APT_RENT_SECD = { SALE: '0' };
+
+export async function fetchAptListPage({ beginPd, endPd, pageIndex = 1, rentSecd = APT_RENT_SECD.SALE }) {
+  const body = new URLSearchParams({ beginPd, endPd, pageIndex: String(pageIndex) });
+  if (rentSecd) body.set('rentSecd', rentSecd);
+  const html = await request(APT_LIST_URL, { method: 'POST', body: body.toString() });
+  return parseAptListPage(html);
+}
+
+/**
+ * 컬럼: 지역 | 주택구분 | 분양/임대 | 주택명 | 시공사 | 문의처 | 모집공고일 | 청약기간 | 당첨자발표 | …
+ * 잔여세대 목록과 달리 data-hsecd 가 없다 — 아파트 일반분양이라 houseSecd 는 01 고정.
+ */
+export function parseAptListPage(html) {
+  const totalMatch = html.match(/총게시물\s*:\s*<b[^>]*>([\d,]+)<\/b>/);
+  const total = totalMatch ? Number(totalMatch[1].replace(/,/g, '')) : 0;
+
+  const rows = [...html.matchAll(/<tr\s+data-pbno="([^"]*)"\s+data-hmno="([^"]*)"\s+data-honm="([^"]*)">([\s\S]*?)<\/tr>/g)]
+    .map(([, pblancNo, houseManageNo, honm, inner]) => {
+      const cells = tdList(inner).map(text);
+      const [applyStart, applyEnd] = splitPeriod(cells[7]);
+      return {
+        pblancNo,
+        houseManageNo,
+        houseSecd: '01',
+        area: cells[0] || '',
+        kind: '아파트 일반분양',
+        houseType: cells[1] || '', // 민영 / 국민
+        saleType: cells[2] || '', // 분양주택 / 임대
+        name: decodeEntities(honm) || cells[3] || '',
+        developer: cells[4] || '',
+        noticeDate: cells[6] || '',
+        applyStart,
+        applyEnd,
+        winnerDate: cells[8] || '',
+        isNew: /ic_new\.png/.test(inner),
+      };
+    });
+
+  return { total, rows };
+}
+
+export async function fetchAptList({ beginPd, endPd, onProgress } = {}) {
+  const first = await fetchAptListPage({ beginPd, endPd, pageIndex: 1 });
+  const perPage = first.rows.length || 10;
+  const pages = Math.max(1, Math.ceil(first.total / perPage));
+  const all = [...first.rows];
+  onProgress?.({ page: 1, pages, collected: all.length, total: first.total });
+
+  for (let p = 2; p <= pages; p++) {
+    const { rows } = await fetchAptListPage({ beginPd, endPd, pageIndex: p });
+    if (!rows.length) break;
+    all.push(...rows);
+    onProgress?.({ page: p, pages, collected: all.length, total: first.total });
+  }
+
+  const byId = new Map();
+  for (const row of all) byId.set(`${row.pblancNo}-${row.houseSecd}`, row);
+  return { total: first.total, rows: [...byId.values()] };
+}
+
+/* ------------------------------------------------------------------ */
 /* 상세                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -169,6 +243,8 @@ export async function fetchDetail({ houseManageNo, pblancNo, houseSecd }) {
   const html = await request(detailUrl({ houseManageNo, pblancNo, houseSecd }));
   return parseDetail(html);
 }
+
+export { isApt };
 
 export function parseDetail(html) {
   const out = {
@@ -186,6 +262,7 @@ export function parseDetail(html) {
     contractEnd: '',
     moveIn: '',
     priceUnit: '',
+    stages: [],
     types: [],
     notes: [],
   };
@@ -216,15 +293,30 @@ export function parseDetail(html) {
     else if (key.startsWith('당첨자')) out.winnerDate = v;
     else if (key === '계약일') [out.contractStart, out.contractEnd] = splitPeriod(v);
   }
-  // 불법행위재공급 유형은 특별/일반공급 접수기간이 별도 행으로 들어온다
-  const general = html.match(/id="rnk1CrsRceptPd"[^>]*>([\s\S]*?)<\/td>/);
-  if (general && !out.applyStart) [out.applyStart, out.applyEnd] = splitPeriod(text(general[1]));
+  // 아파트 일반분양과 불법행위재공급은 접수일이 단계별로 나뉘어 별도 행에 들어온다.
+  // (아파트: 특별공급 / 1순위 / 2순위, 불법행위재공급: 특별공급 / 일반공급)
+  // 단계 이름은 바로 앞 칸에 적혀 있다 — 유형별로 "특별공급/1순위/2순위" 도 되고
+  // "특별공급/일반공급" 도 되므로, 추측하지 말고 화면에 적힌 값을 그대로 쓴다.
+  const STAGE_IDS = 'spSuplyRceptPd|speclSuplyRceptPd|rnk1CrsRceptPd|rnk2CrsRceptPd';
+  const stageRow = new RegExp(`<td>\\s*([^<]{1,12}?)\\s*</td>\\s*<td[^>]*id="(${STAGE_IDS})"[^>]*>([\\s\\S]*?)</td>`, 'g');
+  for (const [, label, , value] of html.matchAll(stageRow)) {
+    const v = text(value);
+    if (!/\d{4}-\d{2}-\d{2}/.test(v)) continue; // "-" 로 비어 있는 단계는 건너뛴다
+    const [start, end] = splitPeriod(v);
+    out.stages.push({ label: text(label), start, end });
+  }
+  if (out.stages.length && !out.applyStart) {
+    out.applyStart = out.stages.reduce((a, s) => (a && a < s.start ? a : s.start), '');
+    out.applyEnd = out.stages.reduce((a, s) => (a > (s.end || s.start) ? a : s.end || s.start), '');
+  }
 
   // 주택형별 세대수 — "공급대상" 표 (불법행위재공급 등에서 제공)
   const targetUnits = parseSupplyTargets(sectionAfter(html, '공급대상'));
 
-  // 공급내역 및 입주예정월
-  const supply = sectionAfter(html, '공급내역 및 입주예정월');
+  // 공급금액 표. 소제목이 유형마다 다르다.
+  //   잔여세대   "공급내역 및 입주예정월"
+  //   아파트     "공급금액, 2순위 청약금 및 입주예정월"
+  const supply = sectionAfterHeading(html, /입주예정월/);
   if (supply) {
     const table = supply.match(/<table[\s\S]*?<\/table>/)?.[0];
     if (table) {
@@ -281,6 +373,14 @@ export function parseDetail(html) {
 function sectionAfter(html, heading) {
   const idx = html.indexOf(`>${heading}<`);
   return idx === -1 ? '' : html.slice(idx);
+}
+
+/** 제목 문구가 유형마다 달라질 때, 패턴으로 소제목을 찾아 그 뒤를 자른다 */
+function sectionAfterHeading(html, pattern) {
+  for (const m of html.matchAll(/<h5[^>]*>([\s\S]*?)<\/h5>/g)) {
+    if (pattern.test(text(m[1]))) return html.slice(m.index);
+  }
+  return '';
 }
 
 function columnRole(header) {

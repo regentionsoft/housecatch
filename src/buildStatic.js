@@ -52,7 +52,7 @@ const body = html
   )
   .trim();
 
-const title = `houseCatch — 무순위·임의공급·불법행위재공급 (${stamp(dataset.generatedAt)} 기준)`;
+const title = `houseCatch — 청약 물량과 시세차익 (${stamp(dataset.generatedAt)} 기준)`;
 
 const standalone = `<!doctype html>
 <html lang="ko">
