@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { detailUrl, fetchDetail, fetchList, KIND_CODES } from './applyhome.js';
-import { enrichWithMarket } from './market.js';
+import { applyMarketSnapshot, enrichWithMarket, saveMarketSnapshot } from './market.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DATA_DIR = path.join(ROOT, 'data');
@@ -113,13 +113,20 @@ export async function scrape({ beginPd, endPd, log = () => {} } = {}) {
     await writeFile(CACHE_PATH, JSON.stringify(cache), 'utf8');
   }
 
-  // 국토부 실거래가로 시세/시세차익 붙이기 (실패해도 목록 자체는 살린다)
+  // 국토부 실거래가로 시세/시세차익 붙이기.
+  // 국토부가 해외 IP를 막기 때문에 실패할 수 있고, 그때는 커밋해 둔 시세 스냅샷으로 채운다.
+  let marketAsOf = null;
   if (process.env.SKIP_MARKET !== '1') {
+    let fresh = 0;
     try {
       await enrichWithMarket(items, { log });
+      fresh = items.filter((i) => i.market).length;
     } catch (err) {
-      log(`! 시세 비교 건너뜀: ${err.message}`);
+      log(`! 실거래 조회 실패: ${err.message}`);
     }
+    if (fresh) await saveMarketSnapshot(items);
+    // 이번에 못 구한 항목은 저장해 둔 값으로 메운다
+    marketAsOf = (await applyMarketSnapshot(items, { log }))?.asOf ?? null;
   }
 
   items.sort(byApplyStartDesc);
@@ -129,6 +136,7 @@ export async function scrape({ beginPd, endPd, log = () => {} } = {}) {
     range,
     source: 'https://www.applyhome.co.kr/ai/aia/selectAPTRemndrLttotPblancListView.do',
     marketSource: 'https://rt.molit.go.kr/',
+    marketAsOf,
     counts: summarize(items, todayStr),
     items,
   };

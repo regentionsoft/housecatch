@@ -24,25 +24,52 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE_DIR = path.join(ROOT, 'data', 'molit');
 const REGION_PATH = path.join(CACHE_DIR, 'regions.json');
 
-/** 실거래 CSV 캐시 유효기간(일) */
-const CACHE_TTL_DAYS = 3;
+/** 실거래 CSV 캐시 유효기간(일). 실거래는 천천히 쌓이니 넉넉히 잡는다. */
+const CACHE_TTL_DAYS = 7;
+/**
+ * 국토부는 하루 100건까지만 CSV 를 내려준다. 한도를 넘으면 CSV 대신 에러가 오므로
+ * 한 번 실행에 이만큼만 받고, 나머지는 캐시로 버틴다. 며칠에 걸쳐 캐시가 채워진다.
+ */
+const MAX_DOWNLOADS_PER_RUN = 90;
+
+let downloads = 0;
+let quotaExhausted = false;
+export const downloadCount = () => downloads;
+export const isQuotaExhausted = () => quotaExhausted;
 
 export const THING = { APT: 'A', PRESALE: 'E' };
 export const THING_LABEL = { A: '매매', E: '분양권' };
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * 국토부는 해외 IP를 막아서 (GitHub Actions 러너 등) 연결 자체가 타임아웃 난다.
+ * 한 번 그런 실패가 나면 남은 요청은 시도하지 않고 바로 캐시로 넘어간다.
+ */
+let networkDown = false;
+export const isNetworkDown = () => networkDown;
+
 async function post(pathname, body) {
-  const res = await fetch(BASE + pathname, {
-    method: 'POST',
-    headers: {
-      'User-Agent': UA,
-      Referer: `${BASE}/pt/xls/xls.do?mobileAt=`,
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      'Accept-Language': 'ko-KR,ko;q=0.9',
-    },
-    body,
-  });
+  if (networkDown) throw new Error('국토부 실거래가 서버에 연결할 수 없습니다');
+
+  let res;
+  try {
+    res = await fetch(BASE + pathname, {
+      method: 'POST',
+      headers: {
+        'User-Agent': UA,
+        Referer: `${BASE}/pt/xls/xls.do?mobileAt=`,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Accept-Language': 'ko-KR,ko;q=0.9',
+      },
+      body,
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (err) {
+    networkDown = true; // 연결 단계 실패 — 이후 요청은 접어둔다
+    throw new Error(`국토부 연결 실패 (${err.name === 'TimeoutError' ? '응답 없음' : err.message})`);
+  }
+
   if (!res.ok) throw new Error(`POST ${pathname} → HTTP ${res.status}`);
   return res;
 }
@@ -217,11 +244,17 @@ export function parseTradeCsv(text) {
  * @param {{thing:string, region:object, from:string, to:string}} opts
  */
 export async function fetchTrades({ thing, region, from, to }) {
-  const key = `${region.sggCode}-${thing}-${from}-${to}`.replace(/[^\w-]/g, '');
-  const file = path.join(CACHE_DIR, `${key}.json`);
+  // 조회 구간은 매일 하루씩 밀리므로 키에 넣지 않는다 — 넣으면 날마다 캐시가 새로 쌓인다
+  const file = path.join(CACHE_DIR, `${region.sggCode}-${thing}.json`);
 
   const cached = await readJson(file);
   if (cached && Date.now() - cached.at < CACHE_TTL_DAYS * 86400_000) return cached.trades;
+  // 캐시가 오래됐어도 못 받는 상황(연결 차단·한도 소진·예산 초과)이면 있는 걸 쓴다
+  const cantFetch = networkDown || quotaExhausted || downloads >= MAX_DOWNLOADS_PER_RUN;
+  if (cantFetch) {
+    if (cached) return cached.trades;
+    throw new Error(quotaExhausted ? '국토부 일일 다운로드 한도 소진' : '내려받기 예산 초과');
+  }
 
   const body = new URLSearchParams({
     srhThingNo: thing,
@@ -241,17 +274,28 @@ export async function fetchTrades({ thing, region, from, to }) {
     mobileAt: '',
   });
 
-  const res = await post('/pt/xls/ptXlsCSVDown.do', body.toString());
-  // 조건이 잘못되면 CSV 대신 JSON 에러를 돌려준다 (예: 조회 범위 1년 초과)
-  if ((res.headers.get('content-type') ?? '').includes('json')) {
-    const { error } = await res.json();
-    throw new Error(String(error ?? '알 수 없는 오류').replace(/\n/g, ' '));
+  let buf;
+  try {
+    downloads++;
+    buf = await (await post('/pt/xls/ptXlsCSVDown.do', body.toString())).arrayBuffer();
+  } catch (err) {
+    if (cached) return cached.trades;
+    throw err;
   }
 
-  const csv = new TextDecoder('euc-kr').decode(await res.arrayBuffer());
-  const trades = parseTradeCsv(csv).filter((t) => !t.canceled);
+  // 조건이 안 맞으면 CSV 대신 JSON 에러가 오는데, content-type 은 그대로 text/html 이다.
+  // (예: "조회 범위 1년 초과", "일일 다운로드 횟수는 최대 100건")
+  const head = new TextDecoder('utf-8').decode(buf.slice(0, 200)).trimStart();
+  if (head.startsWith('{')) {
+    const msg = String(JSON.parse(new TextDecoder('utf-8').decode(buf)).error ?? '알 수 없는 오류').replace(/\n/g, ' ');
+    if (msg.includes('일일 다운로드')) quotaExhausted = true;
+    if (cached) return cached.trades;
+    throw new Error(msg);
+  }
+
+  const trades = parseTradeCsv(new TextDecoder('euc-kr').decode(buf)).filter((t) => !t.canceled);
 
   await mkdir(CACHE_DIR, { recursive: true });
-  await writeFile(file, JSON.stringify({ at: Date.now(), trades }), 'utf8');
+  await writeFile(file, JSON.stringify({ at: Date.now(), from, to, trades }), 'utf8');
   return trades;
 }

@@ -9,7 +9,21 @@
  * 어느 단계에서 나온 값인지 화면에 같이 보여줘서, 느슨한 비교인지 바로 알 수 있게 한다.
  */
 
-import { fetchDongIndex, fetchRegions, fetchTrades, sidoAliases, THING } from './molit.js';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { downloadCount, fetchDongIndex, fetchRegions, fetchTrades, sidoAliases, THING } from './molit.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/**
+ * 계산이 끝난 시세 결과만 따로 저장한다.
+ *
+ * 국토부는 해외 IP를 막아서 GitHub Actions 에서는 실거래를 받을 수 없다. 실거래 원본 캐시는
+ * 50MB가 넘어 저장소에 둘 수도 없다. 그래서 국내에서 돌린 결과(수백 KB)만 커밋해 두고,
+ * 서버에 못 붙는 환경에서는 이 파일로 시세를 채운다.
+ */
+export const SNAPSHOT_PATH = path.join(ROOT, 'data', 'market-snapshot.json');
 
 /** 실거래를 며칠치 볼지. 국토부가 조회 범위를 최대 1년으로 제한한다. */
 const WINDOW_DAYS = 364;
@@ -203,11 +217,22 @@ export async function enrichWithMarket(items, { log = () => {}, concurrency = 2 
 
   log(`시세 비교 대상 ${needed.size}개 시군구 · ${perItem.size}건 (${range.from} ~ ${range.to} 실거래)`);
 
-  // 2) 시군구별 실거래를 한 번씩만 받는다
+  // 2) 시군구별 실거래를 한 번씩만 받는다.
+  //    하루 내려받기 한도가 있어서, 아직 접수가 남은 물량이 있는 지역부터 처리한다.
+  const today = new Date().toISOString().slice(0, 10);
+  const urgency = new Map();
+  for (const [it, found] of perItem) {
+    const live = it.applyEnd >= today ? 2 : 1;
+    for (const r of found) urgency.set(r.sggCode, Math.max(urgency.get(r.sggCode) ?? 0, live));
+  }
+
   const byRegion = new Map();
-  const entries = [...needed.values()];
+  const entries = [...needed.values()].sort(
+    (a, b) => (urgency.get(b.sggCode) ?? 0) - (urgency.get(a.sggCode) ?? 0),
+  );
   let done = 0;
   let cursor = 0;
+  let skipped = 0;
 
   const worker = async () => {
     while (cursor < entries.length) {
@@ -222,10 +247,10 @@ export async function enrichWithMarket(items, { log = () => {}, concurrency = 2 
           ...presale.map((t) => ({ ...t, kind: 'presale' })),
         ]);
       } catch (err) {
-        log(`  ! ${region.sidoNm} ${region.sggNm} 실거래 조회 실패: ${err.message}`);
+        if (!skipped++) log(`  실거래 조회 중단: ${err.message} (남은 지역은 캐시/기존 값 사용)`);
       }
       done++;
-      if (done % 10 === 0) log(`  실거래 ${done}/${entries.length} 시군구`);
+      if (done % 20 === 0) log(`  실거래 ${done}/${entries.length} 시군구`);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, entries.length) }, worker));
@@ -237,8 +262,69 @@ export async function enrichWithMarket(items, { log = () => {}, concurrency = 2 
   }
 
   const withMarket = items.filter((i) => i.market).length;
-  log(`시세 매칭 ${withMarket}/${items.length}건`);
+  log(`시세 매칭 ${withMarket}/${items.length}건 (실거래 ${downloadCount()}건 내려받음${skipped ? `, ${skipped}개 지역 건너뜀` : ''})`);
+  if (!withMarket) throw new Error('시세를 하나도 매칭하지 못했습니다');
   return items;
+}
+
+/* ------------------------------------------------------------------ */
+/* 시세 결과 스냅샷                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 이번에 계산된 시세를 저장한다. 하루 한도 때문에 일부 지역을 건너뛰었을 수 있으므로
+ * 기존 스냅샷 위에 덮어쓴다 — 이번에 못 구한 항목의 지난 값을 날리지 않는다.
+ */
+export async function saveMarketSnapshot(items) {
+  let entries = {};
+  try {
+    entries = JSON.parse(await readFile(SNAPSHOT_PATH, 'utf8')).entries ?? {};
+  } catch { /* 첫 실행 */ }
+
+  for (const it of items) {
+    if (!it.market) continue;
+    entries[it.id] = {
+      market: it.market,
+      types: it.types.map((t) => ({ name: t.name, market: t.market ?? null, gain: t.gain ?? null })),
+    };
+  }
+
+  const payload = { asOf: new Date().toISOString(), count: Object.keys(entries).length, entries };
+  await mkdir(path.dirname(SNAPSHOT_PATH), { recursive: true });
+  await writeFile(SNAPSHOT_PATH, JSON.stringify(payload), 'utf8');
+  return payload;
+}
+
+/**
+ * 저장해 둔 시세 결과를 물량 목록에 다시 붙인다.
+ * 스냅샷 이후 새로 올라온 공고는 시세 없이 남는다 — 없는 걸 지어내지 않는다.
+ */
+export async function applyMarketSnapshot(items, { log = () => {} } = {}) {
+  let snap;
+  try {
+    snap = JSON.parse(await readFile(SNAPSHOT_PATH, 'utf8'));
+  } catch {
+    log('저장된 시세 스냅샷이 없어 시세 없이 진행합니다');
+    return null;
+  }
+
+  let applied = 0;
+  for (const it of items) {
+    if (it.market) continue; // 이번에 직접 계산한 값이 우선
+    const hit = snap.entries[it.id];
+    if (!hit) continue;
+    it.market = hit.market;
+    const byName = new Map(hit.types.map((t) => [t.name, t]));
+    for (const type of it.types) {
+      const t = byName.get(type.name);
+      if (!t) continue;
+      type.market = t.market;
+      type.gain = t.gain;
+    }
+    applied++;
+  }
+  if (applied) log(`저장된 시세로 ${applied}건 보충 (${snap.asOf.slice(0, 10)} 기준)`);
+  return { asOf: snap.asOf, applied };
 }
 
 /** 법정동 이름으로 시군구를 되찾는다 (시도 단위 색인을 필요한 시도만 받는다) */

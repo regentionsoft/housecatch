@@ -1,4 +1,8 @@
 node_modules/
-data/
 dist/
 .DS_Store
+
+# 수집 결과는 커밋하지 않는다 — 단, 계산이 끝난 시세 스냅샷은 예외.
+# 국토부가 해외 IP를 막아서 GitHub Actions 에서는 실거래를 못 받는다. 그때 이 파일로 시세를 채운다.
+data/*
+!data/market-snapshot.json

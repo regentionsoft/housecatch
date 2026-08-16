@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "scrape": "node src/scrape.js",
+    "publish": "node src/publish.js",
     "build:static": "node src/buildStatic.js"
   },
   "engines": {

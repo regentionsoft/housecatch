@@ -829,7 +829,14 @@
     else renderCalendar(list);
 
     const d = new Date(dataset.generatedAt);
-    $('#stamp').textContent = `기준 ${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const stamp = $('#stamp');
+    stamp.textContent = `기준 ${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    if (dataset.marketAsOf) {
+      const m = new Date(dataset.marketAsOf);
+      stamp.title = `물량·일정 ${d.toLocaleString('ko-KR')}\n시세 ${m.toLocaleDateString('ko-KR')} 수집`;
+      const days = Math.floor((d - m) / 86400000);
+      if (days >= 1) stamp.textContent += ` · 시세 ${days}일 전`;
+    }
   }
 
   /* ---------------------------------------------------------------- */
