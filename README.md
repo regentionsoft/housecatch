@@ -8,7 +8,7 @@
 - 시세: [국토교통부 실거래가 공개시스템](https://rt.molit.go.kr/) — 최근 1년 아파트 매매 + 분양/입주권
 - 의존성 없음 (Node 20+ 내장 `fetch`/`http`만 사용)
 
-공개 주소: **https://seohanbin.github.io/housecatch/**
+공개 주소: GitHub Pages (`https://<GitHub 사용자명>.github.io/housecatch/`)
 
 > **네이버 부동산을 안 쓰는 이유** — 네이버 부동산 API(`new.land.naver.com`)는 서버에서 호출하면
 > `429 TOO_MANY_REQUESTS`로 막혀서 시세 근거로 쓸 수 없습니다. 대신 같은 성격의 공식 자료인
