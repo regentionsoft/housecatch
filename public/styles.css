@@ -326,6 +326,8 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .basis.lv-exact::before { background: var(--up); }
 .basis.lv-sameComplex::before { background: var(--upcoming); }
 .basis.lv-sameDong::before { background: var(--warn); }
+.basis.basis-old { color: var(--warn); }
+.basis.basis-old::before { background: var(--warn); }
 .basis-note { white-space: pre-line; }
 .basis-note b { color: var(--text); }
 

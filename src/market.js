@@ -82,7 +82,7 @@ export function resolveRegions(item, regions) {
   const candidates = regions.filter((r) => sidoAliases(r.sidoNm).some((a) => a === item.area || a.includes(item.area)));
   const pool = candidates.length ? candidates : regions;
 
-  const full = pool.filter((r) => r.sggNm.split(/\s+/).every((t) => loc.includes(t)));
+  const full = pool.filter((r) => r.sggNm.split(/\s+/).every((t) => hasToken(loc, t)));
   if (full.length) {
     // 토큰이 많을수록 구체적인 매칭 — "고양시 덕양구" > "고양시"
     const best = Math.max(...full.map((r) => r.sggNm.split(/\s+/).length));
@@ -91,8 +91,17 @@ export function resolveRegions(item, regions) {
 
   return pool.filter((r) => {
     const [head, ...rest] = r.sggNm.split(/\s+/);
-    return rest.length > 0 && loc.includes(head);
+    return rest.length > 0 && hasToken(loc, head);
   });
+}
+
+/**
+ * 시군구 이름이 다른 이름 안에 묻혀 있는 걸 매칭으로 세지 않는다.
+ * "경기도 남양주시 오남읍" 에서 그냥 문자열 포함으로 찾으면 "양주시" 까지 걸려서
+ * 남양주 물량이 양주시 실거래와 비교돼 버린다.
+ */
+function hasToken(text, token) {
+  return new RegExp(`(?<![가-힣])${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(text);
 }
 
 /* ------------------------------------------------------------------ */
@@ -109,12 +118,13 @@ function recent(trades) {
   return [...trades].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, MAX_SAMPLES);
 }
 
-function summarize(matched, level) {
+function summarize(matched, level, vintage) {
   const picked = recent(matched);
   const prices = picked.map((t) => t.price);
   return {
     level,
     levelLabel: MATCH_LEVELS[level].label,
+    vintage,
     price: median(prices),
     low: Math.min(...prices),
     high: Math.max(...prices),
@@ -138,10 +148,18 @@ function summarize(matched, level) {
  */
 function comparable(matched, year = new Date().getFullYear()) {
   const presale = matched.filter((t) => t.kind === 'presale');
-  if (presale.length) return presale;
+  if (presale.length) return { trades: presale, vintage: 'presale' };
   const recent = matched.filter((t) => t.builtYear && t.builtYear >= year - 8);
-  return recent.length ? recent : matched;
+  if (recent.length) return { trades: recent, vintage: 'recent' };
+  // 신축도 분양권도 없으면 구축과 견줄 수밖에 없다 — 화면에 그렇다고 밝힌다
+  return { trades: matched, vintage: 'old' };
 }
+
+export const VINTAGE_LABEL = {
+  presale: '분양권 실거래',
+  recent: '준공 8년 이내',
+  old: '구축 실거래 기준',
+};
 
 export function estimatePrice(target, trades, dong) {
   const { name, area } = target;
@@ -159,7 +177,9 @@ export function estimatePrice(target, trades, dong) {
   for (const [level, test, restrict] of tiers) {
     const matched = trades.filter(test);
     if (!matched.length) continue;
-    return summarize(restrict ? comparable(matched) : matched, level);
+    if (!restrict) return summarize(matched, level, null);
+    const { trades: picked, vintage } = comparable(matched);
+    return summarize(picked, level, vintage);
   }
   return null;
 }
@@ -389,6 +409,7 @@ function applyMarket(item, trades, foundRegions) {
     region: regionNm,
     level: est.level,
     levelLabel: MATCH_LEVELS[est.level].label,
+    vintage: est.vintage ?? null,
     typeName: type.name,
     basePrice: type.price ?? null,
     price: est.price,

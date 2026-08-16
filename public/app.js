@@ -119,9 +119,13 @@
     return `${manwon >= 0 ? '+' : '−'}${fmtPrice(Math.abs(manwon))}`;
   }
   const gainColor = (g) => (g == null ? 'var(--text-3)' : g >= 0 ? 'var(--up)' : 'var(--down)');
+  /** 다른 단지와 견줄 때 어떤 성격의 물건을 썼는지 */
+  const VINTAGE_LABEL = { presale: '분양권 실거래', recent: '준공 8년 내', old: '구축 실거래' };
+
   /** 어느 정도로 비슷한 물건과 비교한 값인지 */
   function basisText(mk) {
-    return `${mk.levelLabel} · 실거래 ${mk.samples}건${mk.latest ? ` · 최근 ${mk.latest}` : ''}`;
+    const vintage = VINTAGE_LABEL[mk.vintage];
+    return `${mk.levelLabel}${vintage ? ` · ${vintage}` : ''} · ${mk.samples}건${mk.latest ? ` · ${mk.latest}` : ''}`;
   }
   const naverUrl = (name) => `https://m.land.naver.com/search/result/${encodeURIComponent(name)}`;
   /** "084.9900B" → { m2: 84.99, tag: "B" } */
@@ -470,7 +474,7 @@
             el('span', { className: 'arrow' }, '→'),
             el('b', { style: `color:${gain != null ? gainColor(gain) : 'inherit'}` }, `시세 ${fmtPrice(mk.price)}`),
           ),
-          el('div', { className: `basis lv-${mk.level}` }, basisText(mk)),
+          el('div', { className: `basis lv-${mk.level}${mk.vintage === 'old' ? ' basis-old' : ''}` }, basisText(mk)),
         ),
       );
     }
@@ -799,9 +803,12 @@
           el(
             'div',
             { className: 'note basis-note' },
-            el('b', {}, `시세 근거 — ${it.market.levelLabel}`),
+            el('b', {}, `시세 근거 — ${it.market.levelLabel}${VINTAGE_LABEL[it.market.vintage] ? ` · ${VINTAGE_LABEL[it.market.vintage]}` : ''}`),
             `\n${it.market.region} · 최근 1년 실거래 ${it.market.samples}건 (${fmtPrice(it.market.low)} ~ ${fmtPrice(it.market.high)}, 중앙값 ${fmtPrice(it.market.price)})`,
             it.market.ref ? `\n비교 대상: ${it.market.ref}${it.market.presaleShare ? ` · 분양권 거래 ${it.market.presaleShare}%` : ''}` : '',
+            it.market.vintage === 'old'
+              ? '\n주변에 분양권이나 신축 거래가 없어 구축 실거래와 비교했습니다. 신축 분양가와는 성격이 달라 차익이 실제보다 크게 벌어져 보일 수 있어요.'
+              : '',
             '\n국토교통부 실거래가 기준이라 네이버 부동산 호가와는 차이가 있을 수 있어요.',
           ),
         );
